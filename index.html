@@ -99,7 +99,11 @@ button:focus-visible,.track:focus-visible{outline:2px solid var(--accent);outlin
 (() => {
 const W = 1280, H = 720, TOP = 92, BOT = 628, FLOOR = 530;
 const cv = document.getElementById('film');
-const ctx = cv.getContext('2d');
+let ctx = cv.getContext('2d');
+/* reusable offscreen layers for cheap soft effects (blur, smoke) */
+const layer = () => { const c = document.createElement('canvas'); return { c, x: c.getContext('2d') }; };
+const LA = layer(), LB = layer(), LS = layer();
+function fit(L, w, h) { if (L.c.width !== w || L.c.height !== h) { L.c.width = w; L.c.height = h; } }
 
 /* ---------- math ---------- */
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
@@ -350,14 +354,22 @@ function rainLines(x0, y0, w, h, n, t, a, wind = .12) {
   ctx.stroke();
 }
 function smoke(t, d) {
+  const main = ctx, k = main.getTransform().a, q = 4;
+  const w = Math.ceil(cv.width / q), h = Math.ceil(cv.height / q);
+  fit(LS, w, h); ctx = LS.x;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, w, h); ctx.setTransform(k / q, 0, 0, k / q, 0, 0);
   for (let i = 0; i < 16; i++) {
     const r = 180 + rnd(i + 5) * 220;
     const x = ((rnd(i) * (W + 400) + t * (12 + rnd(i + 9) * 25)) % (W + 400)) - 200;
     const y = TOP + rnd(i + 3) * (BOT - TOP) + Math.sin(t * .4 + i) * 30;
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(205,205,212,${.22 * d})`); g.addColorStop(1, 'rgba(205,205,212,0)');
+    g.addColorStop(0, `rgba(205,205,212,${Math.min(1, .22 * d)})`); g.addColorStop(1, 'rgba(205,205,212,0)');
     ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
   }
+  ctx = main;
+  const sm = ctx.imageSmoothingQuality; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(LS.c, 0, 0, w, h, 0, 0, W, H);
+  ctx.imageSmoothingQuality = sm;
 }
 function wisp(x, y, t, a = .5, h = 140) {
   ctx.save(); ctx.lineCap = 'round';
@@ -861,9 +873,15 @@ function s13(t, p) {
   const sway = Math.sin(t * .9) * .035 * (1 - seg(p, .45, .9)) + Math.sin(t * .55) * .012;
   const z = lerp(1.6, 2.05, ease(seg(p, .4, .78)));
   const blur = lerp(9, 0, ease(seg(p, 0, .5))) + (p > .5 && p < .58 ? 2 : 0);
+  const main = ctx, k = main.getTransform().a;
+  let q = 1, w = 0, h = 0;
+  if (blur >= 1) {
+    q = clamp(blur / 2, 1.5, 4); w = Math.ceil(cv.width / q); h = Math.ceil(cv.height / q);
+    fit(LA, w, h); fit(LB, w, h); ctx = LA.x;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, w, h); ctx.setTransform(k / q, 0, 0, k / q, 0, 0);
+  }
   ctx.save();
   ctx.translate(640, lerp(430, 360, sit)); ctx.rotate(lerp(-1.2, 0, sit) + sway); ctx.scale(z, z); ctx.translate(-640, -400);
-  if ('filter' in ctx && blur > .3) ctx.filter = `blur(${blur.toFixed(1)}px)`;
   room(t, { clouds: .2 });
   table(); candle(533, 452, t, 0);
   weedPot(640, 452, t);
@@ -876,7 +894,12 @@ function s13(t, p) {
     ctx.bezierCurveTo(hx + hs * .35, hy - hs * .6, hx + hs * .6, hy - hs * .05, hx, hy + hs * .35); ctx.stroke();
   }
   ctx.restore();
-  if ('filter' in ctx) ctx.filter = 'none';
+  if (q > 1) {
+    const b = LB.x; b.setTransform(1, 0, 0, 1, 0, 0); b.clearRect(0, 0, w, h);
+    b.drawImage(LA.c, 0, 0);
+    if ('filter' in b) { b.filter = `blur(${(blur * k / q).toFixed(2)}px)`; b.drawImage(LA.c, 0, 0); b.filter = 'none'; }
+    ctx = main; ctx.drawImage(LB.c, 0, 0, w, h, 0, 0, W, H);
+  }
   smoke(t, lerp(1.35, .85, p));
   const trip = seg(p, .55, .8);
   if (trip > 0) {
@@ -886,7 +909,12 @@ function s13(t, p) {
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
   }
   const rub = seg(p, .2, .44) * (1 - seg(p, .44, .52));
-  if (rub > 0) povHand(lerp(260, 380, rub) + Math.sin(t * 9) * 10 * rub, lerp(760, 520, rub), .35, 1.1, 'open');
+  if (rub > 0) {
+    povHand(lerp(260, 380, rub) + Math.sin(t * 9) * 10 * rub, lerp(760, 520, rub), .35, 1.1, 'open');
+    ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
+    povHand(lerp(260, 380, rub) + Math.sin(t * 9 + Math.PI) * 10 * rub, lerp(770, 530, rub), .35, 1.1, 'open');
+    ctx.restore();
+  }
   let open;
   if (p < .05) open = ease(seg(p, 0, .05)) * .4;
   else if (p < .09) open = lerp(.4, .04, seg(p, .05, .09));
@@ -960,6 +988,7 @@ function render(T) {
   ctx.textBaseline = 'alphabetic';
 }
 
+window.__film = { render, total };
 /* ---------- sound: everything is synthesized live with Web Audio ---------- */
 const Sound = (() => {
   let ac = null, master, verb, noiseBuf, beds = null, on = true, lastScene = -1, cursor = 0;
@@ -1200,6 +1229,7 @@ function progress() {
   }
 }
 function loop(ts) {
+  if (window.__EXPORT) return;
   if (playing) {
     if (last !== null) time = Math.min(total, time + (ts - last) / 1000);
     last = ts;
